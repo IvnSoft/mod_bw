@@ -24,11 +24,11 @@ Platform     : Linux/x86         (Tested with Fedora Core 4, Suse, etc)
 Notes        : This is a stable version of mod_bw. It should work with
                almost any MPM (tested with WinNT/prefork/Worker MPM).
 
-               We are reaching the End of mod_bw series 0.x. As soon as this
+               We are reaching the End of mod_bw series 0.x. As soon as this 
                last changes are confirmed by the users (perhaps some changes
                at request), i'll set this release to version 1.0 final.
 
-Limitations  : This mod doesn't know how fast the client is
+Limitations  : This mod doesn't know how fast the client is 
                downloading a file, so it just divides the bw assigned
                between the users.
                MaxConnections works only for the given scope. (i.e , all
@@ -40,7 +40,7 @@ Changelog :
 2010-05-27 : Fixed weird behaviour on Windows Hosts. (mod_bw.txt)
              Added high resolution timers for windows. (speed improvements)
              Fixed stupid bug that caused crash when mod is enabled but there is
-            not a single limit.
+             not a single limit.
 2010-05-24 : Code Cleanup. No more warnings or stuff in Visual Studio
 2010-04-28 : Bruce's Birthday Gift : A callback to the stats of the mod :)
 2010-04-06 : Fixed "Invisible" memory leak. Only seen when serving HUGE streams.
@@ -71,8 +71,8 @@ Changelog :
 #include "scoreboard.h"
 
 #if defined(WIN32)
-#include <windows.h>
-#include <mmsystem.h>
+ #include <windows.h>
+ #include <mmsystem.h>
 #endif
 
 #define MIN_BW 256              /* Minimal bandwidth 256 bytes  */
@@ -85,23 +85,23 @@ Changelog :
 
 /* Compatibility with regex on apache less than 2.1 */
 #if !AP_MODULE_MAGIC_AT_LEAST(20050127,0)
-typedef regex_t ap_regex_t;
-#define AP_REG_EXTENDED REG_EXTENDED
-#define AP_REG_ICASE REG_ICASE
+  typedef regex_t ap_regex_t;
+  #define AP_REG_EXTENDED REG_EXTENDED
+  #define AP_REG_ICASE REG_ICASE
 #endif
 
 /* Compatibility with obsolete ap_get_server_version() */
 #if !AP_MODULE_MAGIC_AT_LEAST(20051115,4)
-#define ap_get_server_banner ap_get_server_version
+  #define ap_get_server_banner ap_get_server_version
 #endif
 
 /* Compatibility for APR < 1 */
 #if ( defined(APR_MAJOR_VERSION) && (APR_MAJOR_VERSION < 1) )
-#define apr_atomic_inc32 apr_atomic_inc
-#define apr_atomic_dec32 apr_atomic_dec
-#define apr_atomic_add32 apr_atomic_add
-#define apr_atomic_cas32 apr_atomic_cas
-#define apr_atomic_set32 apr_atomic_set
+  #define apr_atomic_inc32 apr_atomic_inc
+  #define apr_atomic_dec32 apr_atomic_dec
+  #define apr_atomic_add32 apr_atomic_add
+  #define apr_atomic_cas32 apr_atomic_cas
+  #define apr_atomic_set32 apr_atomic_set
 #endif
 
 /* Enum types of "from address" */
@@ -112,7 +112,7 @@ enum from_type {
     T_AGENT
 };
 
-/*
+/* 
  - Stats of each conf
  -
  - id          = Configuration ID
@@ -147,21 +147,20 @@ typedef struct ctx_struct_t
 
 /* With sid we count the shared memory needed.
    BwBase, is a holder to the shared memory base addres */
-static char* vnames[MAX_VHOSTS];
+static char *vnames[MAX_VHOSTS];
 static int sid = 0;
-bw_data* bwbase;
-apr_shm_t* shm;
-
+bw_data *bwbase;
+apr_shm_t *shm;
 
 /* Limits for MaxConnections based on directory */
 typedef struct
 {
     apr_uint32_t sid;
     union {
-        char* from;
+        char *from;
         apr_ipsubnet_t *ip;
     } x;
-    ap_regex_t* agent;
+    ap_regex_t *agent;
     enum from_type type;
     apr_uint32_t max;
 } bw_maxconn;
@@ -171,10 +170,10 @@ typedef struct
 {
     apr_uint32_t sid;
     union {
-        char* from;
+        char *from;
         apr_ipsubnet_t *ip;
     } x;
-    ap_regex_t* agent;
+    ap_regex_t *agent;
     enum from_type type;
     apr_int32_t rate;
 } bw_entry;
@@ -183,7 +182,7 @@ typedef struct
 typedef struct
 {
     apr_uint32_t sid;
-    char* file;
+    char *file;
     apr_uint32_t size;
     apr_uint32_t rate;
 } bw_sizel;
@@ -197,7 +196,7 @@ typedef struct
     apr_array_header_t *maxconnection;
     unsigned int packet;
     int error;
-    char* directory;
+    char *directory;
 } bandwidth_config;
 
 /* Per server configuration structure */
@@ -214,12 +213,12 @@ module AP_MODULE_DECLARE_DATA bw_module;
  * Configurations Directives                                           *
  *---------------------------------------------------------------------*/
  /* Set the mod enabled ... or disabled */
-static const char *bandwidthmodule(cmd_parms* cmd, void* dconf, int flag)
+static const char *bandwidthmodule(cmd_parms * cmd, void *dconf, int flag)
 {
-    bandwidth_server_config* sconf;
+    bandwidth_server_config *sconf;
 
     sconf =
-        (bandwidth_server_config*)ap_get_module_config(cmd->server->
+        (bandwidth_server_config *)ap_get_module_config(cmd->server->
             module_config,
             &bw_module);
     sconf->state = (flag ? BANDWIDTH_ENABLED : BANDWIDTH_DISABLED);
@@ -228,7 +227,7 @@ static const char *bandwidthmodule(cmd_parms* cmd, void* dconf, int flag)
 }
 
 /* Set force mode enabled ... or disabled */
-static const char* forcebandwidthmodule(cmd_parms* cmd, void* dconf,
+static const char *forcebandwidthmodule(cmd_parms * cmd, void *dconf,
     int flag)
 {
     bandwidth_server_config *sconf;
@@ -243,7 +242,7 @@ static const char* forcebandwidthmodule(cmd_parms* cmd, void* dconf,
 }
 
 /* Set the packetsize used in the context */
-static const char *setpacket(cmd_parms* cmd, void* s, const char* pack)
+static const char *setpacket(cmd_parms * cmd, void *s, const char *pack)
 {
     bandwidth_config *conf = (bandwidth_config *)s;
     int temp;
