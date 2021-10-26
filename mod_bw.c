@@ -73,7 +73,6 @@ Changelog :
 #if defined(WIN32)
 #include <windows.h>
 #include <mmsystem.h>
-#include <math.h>
 #endif
 
 #define MIN_BW 256              /* Minimal bandwidth 256 bytes  */
