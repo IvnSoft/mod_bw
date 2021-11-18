@@ -140,7 +140,7 @@ typedef struct ctx_struct_t
 {
     apr_bucket_brigade *bb;
     struct timeval wait;
-    unsigned long long bw_interval_bytes, bw_interval_slept, client_bw;
+    unsigned long long bw_interval_bytes, client_bw;
     apr_time_t bw_interval_start_time;
     long sleep_bypasses_left, sleep_bypasses_total;
 } ctx_struct;
@@ -918,6 +918,7 @@ static int bw_filter(ap_filter_t *f, apr_bucket_brigade *bb)
     const char *buf;
     const char *filename;
     long current_sleep_bypasses = 0;
+    unsigned long long new_client_bw = 0;
 
     /* Only work on main request/no subrequests */
     if (r->main) {
@@ -974,10 +975,20 @@ static int bw_filter(ap_filter_t *f, apr_bucket_brigade *bb)
         ctx->bb = apr_brigade_create(f->r->pool, bucket_alloc);
 
         ctx->bw_interval_start_time = apr_time_now();
-        ctx->bw_interval_slept = 0;
         ctx->bw_interval_bytes = 0;
         ctx->sleep_bypasses_left = 0;
         ctx->sleep_bypasses_total = 0;
+        ctx->client_bw = 0;
+
+        /* Verbose Output - but only the first time the filter is called */
+        ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
+            "ID: %i; Directory : %s; File : %s; Rate : %ld; Minimum : %ld; Size rate : %ld;",
+            confid, conf->directory, filename, bw_rate, bw_min, bw_f_rate);
+
+        ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
+            "clients : %d/%d; rate/min : %ld,%ld", bwmaxconn->connection_count,
+            (connid >= 0) ? get_maxconn(r, conf->maxconnection) : 0,
+            bw_rate, bw_min);
     }
 
     /* We "get" the data of the current configuration */
@@ -991,15 +1002,6 @@ static int bw_filter(ap_filter_t *f, apr_bucket_brigade *bb)
 
     /* Add 1 active connection to the record */
     apr_atomic_inc32(&bwmaxconn->connection_count);
-
-    /* Verbose Output */
-    ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, r->server,
-        "ID: %i; Directory : %s; File : %s; Rate : %ld; Minimum : %ld; Size rate : %ld;",
-        confid, conf->directory, filename, bw_rate, bw_min, bw_f_rate);
-    ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, r->server,
-        "clients : %d/%d; rate/min : %ld,%ld", bwmaxconn->connection_count,
-        (connid >= 0) ? get_maxconn(r, conf->maxconnection) : 0,
-        bw_rate, bw_min);
 
     /*
        - We get buckets until a sentinel appears
@@ -1059,13 +1061,19 @@ static int bw_filter(ap_filter_t *f, apr_bucket_brigade *bb)
                         ((double)cur_rate / (double)packet));
 
                 /* if more than 15ms has elapsed, roughly calculate client's actual bandwidth */
-                if ((apr_time_now() - ctx->bw_interval_slept) - ctx->bw_interval_start_time > 15000) {
-                    ctx->client_bw = (ctx->bw_interval_bytes * 1000 / (unsigned long long)((apr_time_now() - ctx->bw_interval_slept) - ctx->bw_interval_start_time)) * 1000;
+                if (apr_time_now() - ctx->bw_interval_start_time > 15000) {
+                    new_client_bw = (ctx->bw_interval_bytes * 1000 / (unsigned long long)(apr_time_now() - ctx->bw_interval_start_time)) * 1000;
+                    /* if the client bandwidth changed more then 1K or is now more than available, log it (if module debug is on) */
+                    if (ctx->client_bw == 0 ||  
+                       (unsigned long long)(ctx->client_bw/1024) != (unsigned long long)(new_client_bw/1024) ||
+                       new_client_bw > cur_rate) 
+                    {
+                        /* Verbose logging */
+                        ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "Client BW is ~%ld B/s.  This %s than available BW (%ld). %s", new_client_bw, (new_client_bw > cur_rate ? "More" : "Less"), cur_rate, (new_client_bw > cur_rate ? "BW Limiting!" : "Not BW limiting!"));
+                    }
+                    ctx->client_bw = new_client_bw;
                     ctx->bw_interval_bytes = 0;
-                    ctx->bw_interval_slept = 0;
                     ctx->bw_interval_start_time = apr_time_now();
-                    /* Verbose logging */
-                    ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "Client BW is ~%ld B/s.  This %s than available BW (%ld). %s", ctx->client_bw, (ctx->client_bw > cur_rate ? "More" : "Less"), cur_rate, (ctx->client_bw > cur_rate ? "BW Limiting!" : "Not BW limiting!"));
                 }
 
 #if defined(WIN32)
@@ -1083,7 +1091,7 @@ static int bw_filter(ap_filter_t *f, apr_bucket_brigade *bb)
                         ctx->sleep_bypasses_total = current_sleep_bypasses;   /* setup counters */
                         ctx->sleep_bypasses_left = current_sleep_bypasses;
                         ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
-                            "File: %s. BW: %ld B/s. Packet: %ld bytes.  Bypassing sleep for %i packet(s).", filename, cur_rate, packet, ctx->sleep_bypasses_left);
+                            "File: %s. Available BW: %ld B/s. Packet: %ld bytes. Bypassing sleep for %i packet(s).", filename, cur_rate, packet, ctx->sleep_bypasses_left);
                     }
                     else {
                         /* If number of packets to send in 10ms has changed since last calc because available bandwidth changed, recalcuate */
@@ -1141,7 +1149,7 @@ static int bw_filter(ap_filter_t *f, apr_bucket_brigade *bb)
                 else {
                     if (ctx->client_bw > cur_rate) {        /* Only sleep if the client's calculated bw is greater than available */
                         apr_sleep(sleep);                   /* bandwidth, otherwise there's no reason to sleep. */
-                        ctx->bw_interval_slept += sleep;                        
+                        ctx->bw_interval_start_time += sleep;  /* Adjust interval start time to exclude sleep time. */
                     }
                     ctx->sleep_bypasses_left = 0;
                 }
