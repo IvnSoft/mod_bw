@@ -24,11 +24,11 @@ Platform     : Linux/x86         (Tested with Fedora Core 4, Suse, etc)
 Notes        : This is a stable version of mod_bw. It should work with
                almost any MPM (tested with WinNT/prefork/Worker MPM).
 
-               We are reaching the End of mod_bw series 0.x. As soon as this 
+               We are reaching the End of mod_bw series 0.x. As soon as this
                last changes are confirmed by the users (perhaps some changes
                at request), i'll set this release to version 1.0 final.
 
-Limitations  : This mod doesn't know how fast the client is 
+Limitations  : This mod doesn't know how fast the client is
                downloading a file, so it just divides the bw assigned
                between the users.
                MaxConnections works only for the given scope. (i.e , all
@@ -39,8 +39,8 @@ Changelog :
 2010-07-20 : Fixed ap_get_server_banner unknown on older apache version
 2010-05-27 : Fixed weird behaviour on Windows Hosts. (mod_bw.txt)
              Added high resolution timers for windows. (speed improvements)
-			 Fixed stupid bug that caused crash when mod is enabled but there is
-			not a single limit.
+             Fixed stupid bug that caused crash when mod is enabled but there is
+             not a single limit.
 2010-05-24 : Code Cleanup. No more warnings or stuff in Visual Studio
 2010-04-28 : Bruce's Birthday Gift : A callback to the stats of the mod :)
 2010-04-06 : Fixed "Invisible" memory leak. Only seen when serving HUGE streams.
@@ -71,10 +71,9 @@ Changelog :
 #include "scoreboard.h"
 
 #if defined(WIN32)
-  #include <windows.h>
-  #include <mmsystem.h>
+#include <windows.h>
+#include <mmsystem.h>
 #endif
-
 
 #define MIN_BW 256              /* Minimal bandwidth 256 bytes  */
 #define PACKET 8192             /* Default packet at 8192 bytes */
@@ -86,23 +85,23 @@ Changelog :
 
 /* Compatibility with regex on apache less than 2.1 */
 #if !AP_MODULE_MAGIC_AT_LEAST(20050127,0)
-    typedef regex_t ap_regex_t;
-    #define AP_REG_EXTENDED REG_EXTENDED
-    #define AP_REG_ICASE REG_ICASE
+typedef regex_t ap_regex_t;
+#define AP_REG_EXTENDED REG_EXTENDED
+#define AP_REG_ICASE REG_ICASE
 #endif
 
 /* Compatibility with obsolete ap_get_server_version() */
 #if !AP_MODULE_MAGIC_AT_LEAST(20051115,4)
-   #define ap_get_server_banner ap_get_server_version
+#define ap_get_server_banner ap_get_server_version
 #endif
 
 /* Compatibility for APR < 1 */
 #if ( defined(APR_MAJOR_VERSION) && (APR_MAJOR_VERSION < 1) )
-    #define apr_atomic_inc32 apr_atomic_inc
-    #define apr_atomic_dec32 apr_atomic_dec
-    #define apr_atomic_add32 apr_atomic_add
-    #define apr_atomic_cas32 apr_atomic_cas
-    #define apr_atomic_set32 apr_atomic_set
+#define apr_atomic_inc32 apr_atomic_inc
+#define apr_atomic_dec32 apr_atomic_dec
+#define apr_atomic_add32 apr_atomic_add
+#define apr_atomic_cas32 apr_atomic_cas
+#define apr_atomic_set32 apr_atomic_set
 #endif
 
 /* Enum types of "from address" */
@@ -113,7 +112,7 @@ enum from_type {
     T_AGENT
 };
 
-/* 
+/*
  - Stats of each conf
  -
  - id          = Configuration ID
@@ -127,10 +126,10 @@ enum from_type {
 typedef struct
 {
     apr_uint32_t id;
-    char *v_name;
+    char* v_name;
     apr_uint32_t connection_count;
     apr_uint32_t bandwidth;
-    apr_uint32_t bytes_count;
+    unsigned long long bytes_count;
     apr_uint32_t counter;
     volatile apr_uint32_t lock;
     apr_time_t time;
@@ -139,27 +138,29 @@ typedef struct
 /* A temporal context to save our splitted brigade */
 typedef struct ctx_struct_t
 {
-    apr_bucket_brigade *bb;
+    apr_bucket_brigade* bb;
     struct timeval wait;
+    unsigned long long bw_interval_bytes, client_bw;
+    apr_time_t bw_interval_start_time;
+    long sleep_bypasses_left, sleep_bypasses_total;
 } ctx_struct;
 
-/* With sid we count the shared memory needed. 
+/* With sid we count the shared memory needed.
    BwBase, is a holder to the shared memory base addres */
-static char *vnames[MAX_VHOSTS];
+static char* vnames[MAX_VHOSTS];
 static int sid = 0;
-bw_data *bwbase;
-apr_shm_t *shm;
-
+bw_data* bwbase;
+apr_shm_t* shm;
 
 /* Limits for MaxConnections based on directory */
 typedef struct
 {
     apr_uint32_t sid;
     union {
-        char *from;
-        apr_ipsubnet_t *ip;
+        char* from;
+        apr_ipsubnet_t* ip;
     } x;
-    ap_regex_t *agent;
+    ap_regex_t* agent;
     enum from_type type;
     apr_uint32_t max;
 } bw_maxconn;
@@ -169,10 +170,10 @@ typedef struct
 {
     apr_uint32_t sid;
     union {
-        char *from;
-        apr_ipsubnet_t *ip;
+        char* from;
+        apr_ipsubnet_t* ip;
     } x;
-    ap_regex_t *agent;
+    ap_regex_t* agent;
     enum from_type type;
     apr_int32_t rate;
 } bw_entry;
@@ -181,7 +182,7 @@ typedef struct
 typedef struct
 {
     apr_uint32_t sid;
-    char *file;
+    char* file;
     apr_uint32_t size;
     apr_uint32_t rate;
 } bw_sizel;
@@ -189,13 +190,13 @@ typedef struct
 /* Per directory configuration structure */
 typedef struct
 {
-    apr_array_header_t *limits;
-    apr_array_header_t *minlimits;
-    apr_array_header_t *sizelimits;
-    apr_array_header_t *maxconnection;
-    int packet;
+    apr_array_header_t* limits;
+    apr_array_header_t* minlimits;
+    apr_array_header_t* sizelimits;
+    apr_array_header_t* maxconnection;
+    unsigned int packet;
     int error;
-    char *directory;
+    char* directory;
 } bandwidth_config;
 
 /* Per server configuration structure */
@@ -211,39 +212,39 @@ module AP_MODULE_DECLARE_DATA bw_module;
 /*---------------------------------------------------------------------*
  * Configurations Directives                                           *
  *---------------------------------------------------------------------*/
-/* Set the mod enabled ... or disabled */
-static const char *bandwidthmodule(cmd_parms * cmd, void *dconf, int flag)
+ /* Set the mod enabled ... or disabled */
+static const char* bandwidthmodule(cmd_parms* cmd, void* dconf, int flag)
 {
-    bandwidth_server_config *sconf;
+    bandwidth_server_config* sconf;
 
     sconf =
-        (bandwidth_server_config *) ap_get_module_config(cmd->server->
-                                                         module_config,
-                                                         &bw_module);
+        (bandwidth_server_config*)ap_get_module_config(cmd->server->
+            module_config,
+            &bw_module);
     sconf->state = (flag ? BANDWIDTH_ENABLED : BANDWIDTH_DISABLED);
 
     return NULL;
 }
 
 /* Set force mode enabled ... or disabled */
-static const char *forcebandwidthmodule(cmd_parms * cmd, void *dconf,
-                                        int flag)
+static const char* forcebandwidthmodule(cmd_parms* cmd, void* dconf,
+    int flag)
 {
-    bandwidth_server_config *sconf;
+    bandwidth_server_config* sconf;
 
     sconf =
-        (bandwidth_server_config *) ap_get_module_config(cmd->server->
-                                                         module_config,
-                                                         &bw_module);
+        (bandwidth_server_config*)ap_get_module_config(cmd->server->
+            module_config,
+            &bw_module);
     sconf->force = (flag ? BANDWIDTH_ENABLED : BANDWIDTH_DISABLED);
 
     return NULL;
 }
 
 /* Set the packetsize used in the context */
-static const char *setpacket(cmd_parms * cmd, void *s, const char *pack)
+static const char* setpacket(cmd_parms* cmd, void* s, const char* pack)
 {
-    bandwidth_config *conf = (bandwidth_config *) s;
+    bandwidth_config* conf = (bandwidth_config*)s;
     int temp;
 
     if (pack && *pack && apr_isdigit(*pack))
@@ -260,9 +261,9 @@ static const char *setpacket(cmd_parms * cmd, void *s, const char *pack)
 }
 
 /* Set the error to send when maxconnections is reached */
-static const char *bandwidtherror(cmd_parms * cmd, void *s, const char *err)
+static const char* bandwidtherror(cmd_parms* cmd, void* s, const char* err)
 {
-    bandwidth_config *conf = (bandwidth_config *) s;
+    bandwidth_config* conf = (bandwidth_config*)s;
     int temp;
 
     if (err && *err && apr_isdigit(*err))
@@ -279,14 +280,14 @@ static const char *bandwidtherror(cmd_parms * cmd, void *s, const char *err)
 }
 
 /* Set the maxconnections on a per host basis */
-static const char *maxconnection(cmd_parms * cmd, void *s, const char *from,
-                                 const char *maxc)
+static const char* maxconnection(cmd_parms* cmd, void* s, const char* from,
+    const char* maxc)
 {
-    bandwidth_config *conf = (bandwidth_config *) s;
-    bw_maxconn *a;
+    bandwidth_config* conf = (bandwidth_config*)s;
+    bw_maxconn* a;
     int temp;
-    char *str;
-    char *where = (char *) apr_pstrdup(cmd->pool, from);
+    char* str;
+    char* where = (char*)apr_pstrdup(cmd->pool, from);
     apr_status_t rv;
     char msgbuf[MAX_BUF];
 
@@ -297,19 +298,19 @@ static const char *maxconnection(cmd_parms * cmd, void *s, const char *from,
 
     if (temp < 0)
         return
-            "Connections must be a number of simultaneous connections allowed/s";
+        "Connections must be a number of simultaneous connections allowed/s";
 
-    a = (bw_maxconn *) apr_array_push(conf->maxconnection);
+    a = (bw_maxconn*)apr_array_push(conf->maxconnection);
 
     a->x.from = where;
-    if (!strncasecmp(where,"u:",2))
-    {   
+    if (!strncasecmp(where, "u:", 2))
+    {
         /* Do not limit based on origin, but on user agent */
         a->type = T_AGENT;
-        a->agent = ap_pregcomp(cmd->pool, where+2, 0);
+        a->agent = ap_pregcomp(cmd->pool, where + 2, 0);
         if (a->agent == NULL)
             return "Regular expression could not be compiled.";
-     
+
     }
     else if (!strcasecmp(where, "all")) {
         a->type = T_ALL;
@@ -317,7 +318,7 @@ static const char *maxconnection(cmd_parms * cmd, void *s, const char *from,
     else if ((str = strchr(where, '/'))) {
         *str++ = '\0';
         rv = apr_ipsubnet_create(&a->x.ip, where, str, cmd->pool);
-        if(APR_STATUS_IS_EINVAL(rv)) { 
+        if (APR_STATUS_IS_EINVAL(rv)) {
             /* looked nothing like an IP address */
             return "An IP address was expected";
         }
@@ -326,14 +327,14 @@ static const char *maxconnection(cmd_parms * cmd, void *s, const char *from,
             return apr_pstrdup(cmd->pool, msgbuf);
         }
         a->type = T_IP;
-    }       
+    }
     else if (!APR_STATUS_IS_EINVAL(rv = apr_ipsubnet_create(&a->x.ip, where, NULL, cmd->pool))) {
         if (rv != APR_SUCCESS) {
             apr_strerror(rv, msgbuf, sizeof msgbuf);
             return apr_pstrdup(cmd->pool, msgbuf);
         }
         a->type = T_IP;
-    }       
+    }
     else { /* no slash, didn't look like an IP address => must be a host */
         a->type = T_HOST;
     }
@@ -344,14 +345,14 @@ static const char *maxconnection(cmd_parms * cmd, void *s, const char *from,
 }
 
 /* Set the bandwidth on a per host basis */
-static const char *bandwidth(cmd_parms * cmd, void *s, const char *from,
-                             const char *bw)
+static const char* bandwidth(cmd_parms* cmd, void* s, const char* from,
+    const char* bw)
 {
-    bandwidth_config *conf = (bandwidth_config *) s;
-    bw_entry *a;
+    bandwidth_config* conf = (bandwidth_config*)s;
+    bw_entry* a;
     long int temp;
-    char *str;
-    char *where = (char *) apr_pstrdup(cmd->pool, from);
+    char* str;
+    char* where = (char*)apr_pstrdup(cmd->pool, from);
     apr_status_t rv;
     char msgbuf[MAX_BUF];
 
@@ -364,16 +365,16 @@ static const char *bandwidth(cmd_parms * cmd, void *s, const char *from,
     if (temp < 0)
         return "BandWidth must be a number of bytes/s";
 
-    a = (bw_entry *) apr_array_push(conf->limits);
+    a = (bw_entry*)apr_array_push(conf->limits);
     a->x.from = where;
-    if (!strncasecmp(where,"u:",2))
+    if (!strncasecmp(where, "u:", 2))
     {
         /* Do not limit based on origin, but on user agent */
         a->type = T_AGENT;
-        a->agent = ap_pregcomp(cmd->pool, where+2, 0);
+        a->agent = ap_pregcomp(cmd->pool, where + 2, 0);
         if (a->agent == NULL)
-            return "Regular expression could not be compiled."; 
-        
+            return "Regular expression could not be compiled.";
+
     }
     else if (!strcasecmp(where, "all")) {
         a->type = T_ALL;
@@ -381,7 +382,7 @@ static const char *bandwidth(cmd_parms * cmd, void *s, const char *from,
     else if ((str = strchr(where, '/'))) {
         *str++ = '\0';
         rv = apr_ipsubnet_create(&a->x.ip, where, str, cmd->pool);
-        if(APR_STATUS_IS_EINVAL(rv)) {
+        if (APR_STATUS_IS_EINVAL(rv)) {
             /* looked nothing like an IP address */
             return "An IP address was expected";
         }
@@ -403,25 +404,23 @@ static const char *bandwidth(cmd_parms * cmd, void *s, const char *from,
     }
     if (sid < MAX_VHOSTS)
     {
-        vnames[sid] = apr_pcalloc(cmd->pool,apr_snprintf(msgbuf,MAX_BUF,"%s,%s",cmd->server->server_hostname,where) );
-        vnames[sid] = (char *) apr_pstrdup(cmd->pool, msgbuf);
+        vnames[sid] = apr_pcalloc(cmd->pool, apr_snprintf(msgbuf, MAX_BUF, "%s,%s", cmd->server->server_hostname, where));
+        vnames[sid] = (char*)apr_pstrdup(cmd->pool, msgbuf);
     }
     a->rate = temp;
     a->sid = sid++;
-
 
     return NULL;
 }
 
 /* Set the minimum bandwidth to send */
-static const char *minbandwidth(cmd_parms * cmd, void *s, const char *from,
-                                const char *bw)
+static const char* minbandwidth(cmd_parms* cmd, void* s, const char* from, const char* bw)
 {
-    bandwidth_config *conf = (bandwidth_config *) s;
-    bw_entry *a;
+    bandwidth_config* conf = (bandwidth_config*)s;
+    bw_entry* a;
     long int temp;
-    char *str;
-    char *where = (char *) apr_pstrdup(cmd->pool, from);
+    char* str;
+    char* where = (char*)apr_pstrdup(cmd->pool, from);
     apr_status_t rv;
     char msgbuf[MAX_BUF];
 
@@ -430,13 +429,13 @@ static const char *minbandwidth(cmd_parms * cmd, void *s, const char *from,
     else
         return "Invalid argument";
 
-    a = (bw_entry *) apr_array_push(conf->minlimits);
+    a = (bw_entry*)apr_array_push(conf->minlimits);
     a->x.from = where;
-    if (!strncasecmp(where,"u:",2))
+    if (!strncasecmp(where, "u:", 2))
     {
         /* Do not limit based on origin, but on user agent */
         a->type = T_AGENT;
-        a->agent = ap_pregcomp(cmd->pool, where+2, 0);
+        a->agent = ap_pregcomp(cmd->pool, where + 2, 0);
         if (a->agent == NULL)
             return "Regular expression could not be compiled.";
 
@@ -447,7 +446,7 @@ static const char *minbandwidth(cmd_parms * cmd, void *s, const char *from,
     else if ((str = strchr(where, '/'))) {
         *str++ = '\0';
         rv = apr_ipsubnet_create(&a->x.ip, where, str, cmd->pool);
-        if(APR_STATUS_IS_EINVAL(rv)) {
+        if (APR_STATUS_IS_EINVAL(rv)) {
             /* looked nothing like an IP address */
             return "An IP address was expected";
         }
@@ -474,11 +473,11 @@ static const char *minbandwidth(cmd_parms * cmd, void *s, const char *from,
 }
 
 /* Set the large file bandwidth limit */
-static const char *largefilelimit(cmd_parms * cmd, void *s, const char *file,
-                                  const char *size, const char *bw)
+static const char* largefilelimit(cmd_parms* cmd, void* s, const char* file,
+    const char* size, const char* bw)
 {
-    bandwidth_config *conf = (bandwidth_config *) s;
-    bw_sizel *a;
+    bandwidth_config* conf = (bandwidth_config*)s;
+    bw_sizel* a;
     long int temp, tsize;
     char msgbuf[MAX_BUF];
 
@@ -501,14 +500,14 @@ static const char *largefilelimit(cmd_parms * cmd, void *s, const char *file,
     if (tsize < 0)
         return "File size must be a number of Kbytes";
 
-    a = (bw_sizel *) apr_array_push(conf->sizelimits);
-    a->file = (char *) file;
+    a = (bw_sizel*)apr_array_push(conf->sizelimits);
+    a->file = (char*)file;
     a->size = tsize;
     a->rate = temp;
     if (sid < MAX_VHOSTS)
     {
-        vnames[sid] = apr_pcalloc(cmd->pool,apr_snprintf(msgbuf,MAX_BUF,"%s,%s",cmd->server->server_hostname,file) );
-        vnames[sid] = (char *) apr_pstrdup(cmd->pool, msgbuf);
+        vnames[sid] = apr_pcalloc(cmd->pool, apr_snprintf(msgbuf, MAX_BUF, "%s,%s", cmd->server->server_hostname, file));
+        vnames[sid] = (char*)apr_pstrdup(cmd->pool, msgbuf);
     }
     a->sid = sid++;
 
@@ -520,11 +519,11 @@ static const char *largefilelimit(cmd_parms * cmd, void *s, const char *file,
  * Helper Functions                                                           *
  *----------------------------------------------------------------------------*/
 
-/* Match the input, as part of a domain */
-static int in_domain(const char *domain, const char *what)
+ /* Match the input, as part of a domain */
+static int in_domain(const char* domain, const char* what)
 {
-    int dl = strlen(domain);
-    int wl = strlen(what);
+    size_t dl = strlen(domain);
+    size_t wl = strlen(what);
 
     if ((wl - dl) >= 0) {
         if (strcasecmp(domain, &what[wl - dl]) != 0)
@@ -544,27 +543,27 @@ static int in_domain(const char *domain, const char *what)
 }
 
 /* Get the bandwidth limit based on from address */
-static long get_bw_rate(request_rec * r, apr_array_header_t * a)
+static long get_bw_rate(request_rec* r, apr_array_header_t* a)
 {
-    bw_entry *e = (bw_entry *) a->elts;
-    const char *remotehost = NULL;
+    bw_entry* e = (bw_entry*)a->elts;
+    const char* remotehost = NULL;
     int i;
     int gothost = 0;
-    const char *uastr = NULL;
+    const char* uastr = NULL;
 
     for (i = 0; i < a->nelts; i++) {
 
         switch (e[i].type) {
         case T_AGENT:
             uastr = apr_table_get(r->headers_in, "User-Agent");
-            if (e[i].agent && uastr && ap_regexec(e[i].agent, uastr, 0, NULL, 0)==0 ) 
+            if (e[i].agent && uastr && ap_regexec(e[i].agent, uastr, 0, NULL, 0) == 0)
                 return (e[i].rate);
             break;
         case T_ALL:
             return e[i].rate;
 
         case T_IP:
-            if (apr_ipsubnet_test(e[i].x.ip, r->connection->remote_addr)) {
+            if (apr_ipsubnet_test(e[i].x.ip, r->connection->client_addr)) {
                 return e[i].rate;
             }
             break;
@@ -573,7 +572,7 @@ static long get_bw_rate(request_rec * r, apr_array_header_t * a)
                 int remotehost_is_ip;
 
                 remotehost = ap_get_remote_host(r->connection, r->per_dir_config,
-                                                REMOTE_DOUBLE_REV, &remotehost_is_ip);
+                    REMOTE_DOUBLE_REV, &remotehost_is_ip);
 
                 if ((remotehost == NULL) || remotehost_is_ip)
                     gothost = 1;
@@ -585,16 +584,16 @@ static long get_bw_rate(request_rec * r, apr_array_header_t * a)
                 return (e[i].rate);
             break;
         }
-      
+
     }
     return 0;
 }
 
-/* 
-  Match the pattern with the last digist from filename 
-  An asterisk means any.    
+/*
+  Match the pattern with the last digist from filename
+  An asterisk means any.
 */
-static int match_ext(const char *file, char *match)
+static int match_ext(const char* file, char* match)
 {
     if (file == NULL || match == NULL)
         return 0;
@@ -611,10 +610,10 @@ static int match_ext(const char *file, char *match)
 }
 
 /* Get the bandwidth limit based on filesize */
-static long get_bw_filesize(request_rec * r, apr_array_header_t * a,
-                            apr_uint32_t filesize, const char *filename)
+static long get_bw_filesize(request_rec* r, apr_array_header_t* a,
+    apr_uint32_t filesize, const char* filename)
 {
-    bw_sizel *e = (bw_sizel *) a->elts;
+    bw_sizel* e = (bw_sizel*)a->elts;
     int i;
     apr_uint32_t tmpsize = 0, tmprate = 0;
 
@@ -635,27 +634,27 @@ static long get_bw_filesize(request_rec * r, apr_array_header_t * a,
 }
 
 /* Get the MaxConnections allowed */
-static int get_maxconn(request_rec * r, apr_array_header_t * a)
+static int get_maxconn(request_rec* r, apr_array_header_t* a)
 {
-    bw_maxconn *e = (bw_maxconn *) a->elts;
-    const char *remotehost = NULL;
+    bw_maxconn* e = (bw_maxconn*)a->elts;
+    const char* remotehost = NULL;
     int i;
     int gothost = 0;
-    const char *uastr = NULL;
+    const char* uastr = NULL;
 
     for (i = 0; i < a->nelts; i++) {
 
         switch (e[i].type) {
         case T_AGENT:
             uastr = apr_table_get(r->headers_in, "User-Agent");
-            if (e[i].agent && uastr && ap_regexec(e[i].agent, uastr, 0, NULL, 0)==0 )
+            if (e[i].agent && uastr && ap_regexec(e[i].agent, uastr, 0, NULL, 0) == 0)
                 return (e[i].max);
             break;
         case T_ALL:
             return e[i].max;
 
         case T_IP:
-            if (apr_ipsubnet_test(e[i].x.ip, r->connection->remote_addr)) {
+            if (apr_ipsubnet_test(e[i].x.ip, r->connection->client_addr)) {
                 return e[i].max;
             }
             break;
@@ -664,7 +663,7 @@ static int get_maxconn(request_rec * r, apr_array_header_t * a)
                 int remotehost_is_ip;
 
                 remotehost = ap_get_remote_host(r->connection, r->per_dir_config,
-                                                REMOTE_DOUBLE_REV, &remotehost_is_ip);
+                    REMOTE_DOUBLE_REV, &remotehost_is_ip);
 
                 if ((remotehost == NULL) || remotehost_is_ip)
                     gothost = 1;
@@ -682,31 +681,31 @@ static int get_maxconn(request_rec * r, apr_array_header_t * a)
 }
 
 /* Get an id based on bandwidth limit */
-static int get_sid(request_rec * r, apr_array_header_t * a)
+static int get_sid(request_rec* r, apr_array_header_t* a)
 {
-    bw_entry *e = (bw_entry *) a->elts;
-    const char *remotehost = NULL;
+    bw_entry* e = (bw_entry*)a->elts;
+    const char* remotehost = NULL;
     int i;
     int gothost = 0;
-    const char *uastr;
+    const char* uastr;
 
     remotehost =
         ap_get_remote_host(r->connection, r->per_dir_config, REMOTE_HOST,
-                           NULL);
+            NULL);
 
     for (i = 0; i < a->nelts; i++) {
 
         switch (e[i].type) {
         case T_AGENT:
             uastr = apr_table_get(r->headers_in, "User-Agent");
-            if (e[i].agent && uastr && ap_regexec(e[i].agent, uastr, 0, NULL, 0)==0 )
+            if (e[i].agent && uastr && ap_regexec(e[i].agent, uastr, 0, NULL, 0) == 0)
                 return (e[i].sid);
             break;
         case T_ALL:
             return e[i].sid;
 
         case T_IP:
-            if (apr_ipsubnet_test(e[i].x.ip, r->connection->remote_addr)) {
+            if (apr_ipsubnet_test(e[i].x.ip, r->connection->client_addr)) {
                 return e[i].sid;
             }
             break;
@@ -715,7 +714,7 @@ static int get_sid(request_rec * r, apr_array_header_t * a)
                 int remotehost_is_ip;
 
                 remotehost = ap_get_remote_host(r->connection, r->per_dir_config,
-                                                REMOTE_DOUBLE_REV, &remotehost_is_ip);
+                    REMOTE_DOUBLE_REV, &remotehost_is_ip);
 
                 if ((remotehost == NULL) || remotehost_is_ip)
                     gothost = 1;
@@ -733,10 +732,10 @@ static int get_sid(request_rec * r, apr_array_header_t * a)
 }
 
 /* Get an id based on filesize limit */
-static int get_f_sid(request_rec * r, apr_array_header_t * a, apr_uint32_t filesize,
-                     const char *filename)
+static int get_f_sid(request_rec* r, apr_array_header_t* a, apr_uint32_t filesize,
+    const char* filename)
 {
-    bw_sizel *e = (bw_sizel *) a->elts;
+    bw_sizel* e = (bw_sizel*)a->elts;
     int i;
     apr_uint32_t tmpsize = 0, tmpsid = -1;
 
@@ -759,7 +758,7 @@ static int get_f_sid(request_rec * r, apr_array_header_t * a, apr_uint32_t files
 }
 
 /* Update memory (shm) counters, which holds the bw data per context */
-static void update_counters(bw_data * bwstat, ap_filter_t * f)
+static void update_counters(bw_data* bwstat, ap_filter_t* f)
 {
     apr_time_t nowtime;
 
@@ -770,8 +769,8 @@ static void update_counters(bw_data * bwstat, ap_filter_t * f)
         if (apr_atomic_cas32(&bwstat->lock, 1, 0) == 0) {
 
             /* Calculate bw used in the last timeinterval */
-            bwstat->bandwidth = (apr_uint32_t) (
-                (bwstat->bytes_count / (double) (nowtime - bwstat->time)) *
+            bwstat->bandwidth = (apr_uint32_t)(
+                (bwstat->bytes_count / (double)(nowtime - bwstat->time)) *
                 1000000);
 
             /* Reset counters */
@@ -786,29 +785,29 @@ static void update_counters(bw_data * bwstat, ap_filter_t * f)
     }
 }
 
-static int callback(request_rec * r)
+static int callback(request_rec* r)
 {
     int t;
-    bw_data *bwstat;
+    bw_data* bwstat;
 
     if (r->header_only) {
         return OK;
     }
 
-    if (r->args && !strncasecmp(r->args,"csv",3))
+    if (r->args && !strncasecmp(r->args, "csv", 3))
     {
         ap_set_content_type(r, "text/plain");
 
-        ap_rputs("id,vhost,scope,lock,count,bw,bytes,hits\n",r);
-      
+        ap_rputs("id,vhost,scope,lock,count,bw,bytes,hits\n", r);
+
         for (t = 0; t < sid; t++) {
             bwstat = bwbase + t;
-            ap_rprintf(r,"%d,%s,%d,%d,%d,%d,%d\n",t,bwstat->v_name,bwstat->lock,bwstat->connection_count,bwstat->bandwidth,bwstat->bytes_count,bwstat->counter);
+            ap_rprintf(r, "%d,%s,%d,%d,%d,%d,%d\n", t, bwstat->v_name, bwstat->lock, bwstat->connection_count, bwstat->bandwidth, bwstat->bytes_count, bwstat->counter);
         }
 
         return OK;
     }
-   
+
     ap_set_content_type(r, "text/html");
 
     ap_rputs(DOCTYPE_HTML_3_2, r);
@@ -821,7 +820,7 @@ static int callback(request_rec * r)
     ap_rputs("  </H1>\n", r);
     ap_rputs("  <P>\n", r);
     ap_rprintf(r, "  Apache HTTP Server version: \"%s\"\n",
-               ap_get_server_banner());
+        ap_get_server_banner());
     ap_rputs("  <BR>\n", r);
     ap_rprintf(r, "  Server built: \"%s\"\n", ap_get_server_built());
     ap_rputs("  </P>\n", r);;
@@ -831,47 +830,44 @@ static int callback(request_rec * r)
         bwstat = bwbase + t;
 
         /* This inits the struct that will contain current bw use */
-        ap_rputs("<hr>",r);
-        ap_rprintf(r,"id   : %d <br>",t);
-        ap_rprintf(r,"name : %s <br>",bwstat->v_name);
-        ap_rprintf(r,"lock : %d <br>",bwstat->lock);
-        ap_rprintf(r,"count: %d <br>",bwstat->connection_count);
-        ap_rprintf(r,"bw   : %d <br>",bwstat->bandwidth);
-        ap_rprintf(r,"bytes: %d <br>",bwstat->bytes_count);
-        ap_rprintf(r,"hits : %d <br>",bwstat->counter);
+        ap_rputs("<hr>", r);
+        ap_rprintf(r, "id   : %d <br>", t);
+        ap_rprintf(r, "name : %s <br>", bwstat->v_name);
+        ap_rprintf(r, "lock : %d <br>", bwstat->lock);
+        ap_rprintf(r, "count: %d <br>", bwstat->connection_count);
+        ap_rprintf(r, "bw   : %d <br>", bwstat->bandwidth);
+        ap_rprintf(r, "bytes: %d <br>", bwstat->bytes_count);
+        ap_rprintf(r, "hits : %d <br>", bwstat->counter);
     }
 
     ap_rputs(" </BODY>\n", r);
     ap_rputs("</HTML>\n", r);
 
-    return OK;    
-
-
+    return OK;
 }
 
 /*----------------------------------------------------------------------------*
  * The Handler and the Output Filter. Core of the mod.                        *
  *----------------------------------------------------------------------------*/
-/* With this handler, we can *force* the use of the mod. */
-static int handle_bw(request_rec * r)
+ /* With this handler, we can *force* the use of the mod. */
+static int handle_bw(request_rec* r)
 {
 
-    bandwidth_server_config *sconf =
-        (bandwidth_server_config *) ap_get_module_config(r->server->
-                                                         module_config,
-                                                         &bw_module);
-    bandwidth_config *conf =
-        (bandwidth_config *) ap_get_module_config(r->per_dir_config,
-                                                  &bw_module);
-    bw_data *bwstat;
+    bandwidth_server_config* sconf =
+        (bandwidth_server_config*)ap_get_module_config(r->server->
+            module_config,
+            &bw_module);
+    bandwidth_config* conf =
+        (bandwidth_config*)ap_get_module_config(r->per_dir_config,
+            &bw_module);
+    bw_data* bwstat;
     apr_int32_t confid;
 
     /* Only work on main request/no subrequests */
     if (r->main)
         return DECLINED;
 
-    if (strcmp(r->handler, "modbw-handler")==0) return callback(r);
-
+    if (strcmp(r->handler, "modbw-handler") == 0) return callback(r);
 
     /* Return if module is not enabled */
     if (sconf->state == BANDWIDTH_DISABLED)
@@ -889,7 +885,7 @@ static int handle_bw(request_rec * r)
 
         /* If we are too busy, deny connection */
         confid = get_maxconn(r, conf->maxconnection);
-        if ((bwstat->connection_count >= (apr_uint32_t) confid) && (confid > 0))
+        if ((bwstat->connection_count >= (apr_uint32_t)confid) && (confid > 0))
             return conf->error;
     }
 
@@ -901,25 +897,28 @@ static int handle_bw(request_rec * r)
     return DECLINED;
 }
 
-static int bw_filter(ap_filter_t * f, apr_bucket_brigade * bb)
+static int bw_filter(ap_filter_t* f, apr_bucket_brigade* bb)
 {
-    request_rec *r = f->r;
-    bandwidth_config *conf =
-        (bandwidth_config *) ap_get_module_config(r->per_dir_config,
-                                                  &bw_module);
-    bandwidth_server_config *sconf =
-        (bandwidth_server_config *) ap_get_module_config(r->server->
-                                                         module_config,
-                                                         &bw_module);
-    ctx_struct *ctx = f->ctx;
-    apr_bucket *b = APR_BRIGADE_FIRST(bb);
-    bw_data *bwstat, *bwmaxconn;
+    request_rec* r = f->r;
+    bandwidth_config* conf =
+        (bandwidth_config*)ap_get_module_config(r->per_dir_config,
+            &bw_module);
+    bandwidth_server_config* sconf =
+        (bandwidth_server_config*)ap_get_module_config(r->server->
+            module_config,
+            &bw_module);
+    ctx_struct* ctx = f->ctx;
+    apr_bucket* b = APR_BRIGADE_FIRST(bb);
+    bw_data* bwstat, * bwmaxconn;
     int confid = -1, connid = -1;
     apr_size_t packet = conf->packet, bytes = 0;
     apr_off_t bblen = 0;
-    long int bw_rate, bw_min, bw_f_rate, cur_rate = 0, sleep;
-    const char *buf;
-    const char *filename;
+    apr_size_t bw_rate, bw_min, bw_f_rate, cur_rate = 0;
+    apr_interval_time_t sleep;
+    const char* buf;
+    const char* filename;
+    long current_sleep_bypasses = 0;
+    unsigned long long new_client_bw = 0;
 
     /* Only work on main request/no subrequests */
     if (r->main) {
@@ -945,7 +944,7 @@ static int bw_filter(ap_filter_t * f, apr_bucket_brigade * bb)
 
     /* Get the File Rate. r->finfo.size is not used anymore. */
     bblen = r->bytes_sent;
-    bw_f_rate = get_bw_filesize(r, conf->sizelimits, (off_t) bblen, filename);
+    bw_f_rate = get_bw_filesize(r, conf->sizelimits, (off_t)bblen, filename);
 
 
     /* Check if we've got an ilimited client */
@@ -960,7 +959,7 @@ static int bw_filter(ap_filter_t * f, apr_bucket_brigade * bb)
        - If file size is zero, all files apply
      */
     if (bw_f_rate && (bw_rate > bw_f_rate || !bw_rate)) {
-        confid = get_f_sid(r, conf->sizelimits, (off_t) bblen, filename);
+        confid = get_f_sid(r, conf->sizelimits, (off_t)bblen, filename);
         bw_rate = bw_f_rate;
     }
 
@@ -968,13 +967,6 @@ static int bw_filter(ap_filter_t * f, apr_bucket_brigade * bb)
         bw_min = bw_rate;
     else if (!bw_min)
         bw_min = MIN_BW;
-
-    /* Initialize our temporal space */
-    if (ctx == NULL) {
-        apr_bucket_alloc_t *bucket_alloc = apr_bucket_alloc_create(f->r->pool);
-        f->ctx = ctx = apr_pcalloc(f->r->pool, sizeof(*ctx));
-        ctx->bb = apr_brigade_create(f->r->pool, bucket_alloc);
-    }
 
     /* We "get" the data of the current configuration */
     bwstat = bwbase + confid;
@@ -988,15 +980,28 @@ static int bw_filter(ap_filter_t * f, apr_bucket_brigade * bb)
     /* Add 1 active connection to the record */
     apr_atomic_inc32(&bwmaxconn->connection_count);
 
-    /* Verbose Output */
-    ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, r->server,
-                 "ID: %i Directory : %s Rate : %ld Minimum : %ld Size rate : %ld",
-                 confid, conf->directory, bw_rate, bw_min, bw_f_rate);
-    ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, r->server,
-                 "clients : %d/%d  rate/min : %ld,%ld", bwmaxconn->connection_count,
-                 (connid >= 0) ? get_maxconn(r, conf->maxconnection) : 0,
-                  bw_rate, bw_min);
+    /* Initialize our temporal space, which survives multiple invokations for the same request */
+    if (ctx == NULL) {
+        apr_bucket_alloc_t* bucket_alloc = apr_bucket_alloc_create(f->r->pool);
+        f->ctx = ctx = apr_pcalloc(f->r->pool, sizeof(*ctx));
+        ctx->bb = apr_brigade_create(f->r->pool, bucket_alloc);
 
+        ctx->bw_interval_start_time = apr_time_now();
+        ctx->bw_interval_bytes = 0;
+        ctx->sleep_bypasses_left = 0;
+        ctx->sleep_bypasses_total = 0;
+        ctx->client_bw = 0;
+
+        /* Verbose Output - but only the first time the filter is called */
+        ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
+            "ID: %i; Directory : %s; File : %s; Rate : %ld; Minimum : %ld; Size rate : %ld;",
+            confid, conf->directory, filename, bw_rate, bw_min, bw_f_rate);
+
+        ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
+            "clients : %d/%d; rate/min : %ld,%ld", bwmaxconn->connection_count,
+            (connid >= 0) ? get_maxconn(r, conf->maxconnection) : 0,
+            bw_rate, bw_min);
+    }
 
     /*
        - We get buckets until a sentinel appears
@@ -1009,6 +1014,7 @@ static int bw_filter(ap_filter_t * f, apr_bucket_brigade * bb)
             APR_BUCKET_REMOVE(b);
             APR_BRIGADE_INSERT_TAIL(ctx->bb, b);
             ap_pass_brigade(f->next, ctx->bb);
+            apr_brigade_cleanup(ctx->bb);
 
             /* Delete 1 active connection */
             apr_atomic_dec32(&bwmaxconn->connection_count);
@@ -1017,15 +1023,16 @@ static int bw_filter(ap_filter_t * f, apr_bucket_brigade * bb)
 
         if (apr_bucket_read(b, &buf, &bytes, APR_NONBLOCK_READ) ==
             APR_SUCCESS) {
+
             /* This changed, cause of the limit handling error.. see below */
             while (bytes > 0) {
                 /*
-                   - Ok, i'm doing lots of things here. The bw the client will have, is 
+                   - Ok, i'm doing lots of things here. The bw the client will have, is
                    the bw available divided by the number of clients.
-                   - The minimum bw, will always be MIN_BW. If all bw is used, and new 
+                   - The minimum bw, will always be MIN_BW. If all bw is used, and new
                    connections arrives, they'll have MIN_BW bw available.
                  */
-                cur_rate = (long int) bw_rate / bwmaxconn->connection_count;
+                cur_rate = (long int)bw_rate / bwmaxconn->connection_count;
 
                 if (cur_rate > bw_rate)
                     cur_rate = bw_rate;
@@ -1050,21 +1057,64 @@ static int bw_filter(ap_filter_t * f, apr_bucket_brigade * bb)
 
                 /* Here we get the time we need to sleep to get the specified bw */
                 sleep =
-                    (long int) (1000000 /
-                                ((double) cur_rate / (double) packet));
-#if defined(WIN32)
-                if (sleep < 200000 && cur_rate > 1024) 
-				{
-					sleep = 200000;
-                    packet = cur_rate/5;
-					if (bytes < packet)
-                         packet = bytes;
-				}
-#endif
+                    (unsigned long)(1000000 /
+                        ((double)cur_rate / (double)packet));
 
-                /* 
+                /* if more than 15ms has elapsed, roughly calculate client's actual bandwidth */
+                if (apr_time_now() - ctx->bw_interval_start_time > 15000) {
+                    new_client_bw = (ctx->bw_interval_bytes * 1000 / (unsigned long long)(apr_time_now() - ctx->bw_interval_start_time)) * 1000;
+                    /* if the client bandwidth changed more then 1K or is now more than available, log it (if module debug is on) */
+                    if (ctx->client_bw == 0 ||
+                        (unsigned long long)(ctx->client_bw / 1024) != (unsigned long long)(new_client_bw / 1024) ||
+                        new_client_bw > cur_rate)
+                    {
+                        /* Verbose logging */
+                        ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "Client BW is ~%ld B/s.  This %s than available BW (%ld). %s", new_client_bw, (new_client_bw > cur_rate ? "More" : "Less"), cur_rate, (new_client_bw > cur_rate ? "BW Limiting!" : "Not BW limiting!"));
+                    }
+                    ctx->client_bw = new_client_bw;
+                    ctx->bw_interval_bytes = 0;
+                    ctx->bw_interval_start_time = apr_time_now();
+                }
+
+#if defined(WIN32)
+                /* For Windows, assume the minimum sleep time is 10ms.  If the needed sleep time is less than 10ms, calculate
+                   how many packets to send before sleeping for 10ms.  For very small buckets, this can result in an
+                   absurdly high number of packets to send, probably more than there are buckets, so it doesn't matter. */
+                if (sleep < 10000 && ctx->client_bw > cur_rate)
+                {
+                    /* calculate, based on available bandwidth right now, how many packets can be sent in 10 ms */
+                    current_sleep_bypasses = (long)((double)10000 / (double)(sleep + 1)); /* plus 1 microsecond to avoid divide by zero errors */
+
+                    sleep = 10000;
+
+                    if (ctx->sleep_bypasses_left == 0) {                      /* If not currently counting down packets... */
+                        ctx->sleep_bypasses_total = current_sleep_bypasses;   /* setup counters */
+                        ctx->sleep_bypasses_left = current_sleep_bypasses;
+                        ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
+                            "File: %s. Available BW: %ld B/s. Packet: %ld bytes. Bypassing sleep for %i packet(s).", filename, cur_rate, packet, ctx->sleep_bypasses_left);
+                    }
+                    else {
+                        /* If number of packets to send in 10ms has changed since last calc because available bandwidth changed, recalcuate */
+                        if (ctx->sleep_bypasses_total != current_sleep_bypasses) {
+                            /* new packet counter = packets_per_10ms minus packets already sent */
+                            ctx->sleep_bypasses_left = current_sleep_bypasses - (ctx->sleep_bypasses_total - ctx->sleep_bypasses_left);
+
+                            if (ctx->sleep_bypasses_left < 0) {
+                                ctx->sleep_bypasses_left = 0;            /* if new packets to send is less than zero, reset to zero so we sleep now*/
+                            }
+                            ctx->sleep_bypasses_total = current_sleep_bypasses;    /* Update the total packets to send in this period */
+                            ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
+                                "File: %s. Available BW changed to %ld B/s. Now bypassing sleep for %ld more packet(s).", filename, cur_rate, ctx->sleep_bypasses_left);
+                        }
+                    }
+                }
+                else {
+                    ctx->sleep_bypasses_left = 0;
+                }
+#endif
+                /*
                    Here, we are going to split the bucket, and send it on piece at a time,
-                  doing a "delay" between each piece. That way, we send the data at the 
+                  doing a "delay" between each piece. That way, we send the data at the
                   specified rate.
                  */
                 apr_bucket_split(b, packet);
@@ -1073,25 +1123,36 @@ static int bw_filter(ap_filter_t * f, apr_bucket_brigade * bb)
 
                 /* Decrease our counter */
                 bytes -= packet;
+                ctx->bw_interval_bytes += packet;
 
                 /* Flush and move to the next bucket */
                 ap_pass_brigade(f->next, ctx->bb);
+                apr_brigade_cleanup(ctx->bb);
                 b = APR_BRIGADE_FIRST(bb);
 
                 /* Add the number of bytes transferred, so we can get an estimated bw usage */
-                apr_atomic_add32(&bwstat->bytes_count, packet);
+                apr_atomic_add64(&bwstat->bytes_count, packet);
 
                 /* If the connection goes to hell... go with it ! */
                 if (r->connection->aborted) {
                     /* Verbose. Tells when the connection was ended */
-                    ap_log_error(APLOG_MARK, APLOG_DEBUG,
-                                 0, r->server, "Connection to hell");
+                    ap_log_rerror(APLOG_MARK, APLOG_DEBUG,
+                        0, r, "Connection to hell");
                     apr_atomic_dec32(&bwmaxconn->connection_count);
                     return APR_SUCCESS;
                 }
 
-                /* Sleep ... zZZzZzZzzzz */
-                apr_sleep(sleep);
+                /* Sleep ... but only if the time is right (see Windows clock resolution fix above) */
+                if (ctx->sleep_bypasses_left > 0) {
+                    ctx->sleep_bypasses_left--;
+                }
+                else {
+                    if (ctx->client_bw > cur_rate) {        /* Only sleep if the client's calculated bw is greater than available */
+                        apr_sleep(sleep);                   /* bandwidth, otherwise there's no reason to sleep. */
+                        ctx->bw_interval_start_time += sleep;  /* Adjust interval start time to exclude sleep time. */
+                    }
+                    ctx->sleep_bypasses_left = 0;
+                }
 
                 /* Refresh counters, so we can keep working :) */
                 update_counters(bwstat, f);
@@ -1102,11 +1163,12 @@ static int bw_filter(ap_filter_t * f, apr_bucket_brigade * bb)
         APR_BRIGADE_INSERT_TAIL(ctx->bb, b);
         b = APR_BRIGADE_FIRST(bb);
 
-        /* Add the number of bytes to the counter */
-        apr_atomic_add32(&bwstat->bytes_count, bytes);
+        /* Add the number of bytes to the counter - switched to the 64bit counter for bigger files */
+        apr_atomic_add64(&bwstat->bytes_count, bytes);
 
         /* Pass the final brigade */
         ap_pass_brigade(f->next, ctx->bb);
+        apr_brigade_cleanup(ctx->bb);
     }
 
     /* Delete 1 active connection to the record */
@@ -1121,26 +1183,26 @@ static int bw_filter(ap_filter_t * f, apr_bucket_brigade * bb)
 /*----------------------------------------------------------------------------*
  * Module Init functions                                                      *
  *----------------------------------------------------------------------------*/
-static int bw_init(apr_pool_t * p, apr_pool_t * plog, apr_pool_t * ptemp,
-                   server_rec * s)
+static int bw_init(apr_pool_t* p, apr_pool_t* plog, apr_pool_t* ptemp,
+    server_rec* s)
 {
     apr_status_t status;
     apr_size_t retsize;
     apr_size_t shm_size;
-    bw_data *bwstat;
+    bw_data* bwstat;
     int t;
 #if defined(WIN32)
-	TIMECAPS resolution;
+    TIMECAPS resolution;
 #endif
 
     /* These two help ensure that we only init once. */
-    void *data;
-    const char *userdata_key = "ivn_shm_bw_limit_module";
+    void* data;
+    const char* userdata_key = "ivn_shm_bw_limit_module";
 
     apr_pool_userdata_get(&data, userdata_key, s->process->pool);
     if (!data) {
-        apr_pool_userdata_set((const void *) 1, userdata_key,
-                              apr_pool_cleanup_null, s->process->pool);
+        apr_pool_userdata_set((const void*)1, userdata_key,
+            apr_pool_cleanup_null, s->process->pool);
         return OK;
     }
 
@@ -1149,7 +1211,7 @@ static int bw_init(apr_pool_t * p, apr_pool_t * plog, apr_pool_t * ptemp,
     if (status != APR_SUCCESS)
         return HTTP_INTERNAL_SERVER_ERROR;
 
-    shm_size = (apr_size_t) sizeof(bw_data) * sid;
+    shm_size = (apr_size_t)sizeof(bw_data) * sid;
 
 
     /* If there was a memory block already assigned.. destroy it */
@@ -1157,11 +1219,12 @@ static int bw_init(apr_pool_t * p, apr_pool_t * plog, apr_pool_t * ptemp,
         status = apr_shm_destroy(shm);
         if (status != APR_SUCCESS) {
             ap_log_error(APLOG_MARK, APLOG_ERR, 0, s,
-                         "mod_bw : Couldn't destroy old memory block\n");
+                "mod_bw : Couldn't destroy old memory block\n");
             return status;
-        } else {
+        }
+        else {
             ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, s,
-                 "mod_bw : Old Shared memory block, destroyed.");
+                "mod_bw : Old Shared memory block, destroyed.");
         }
     }
 
@@ -1169,32 +1232,32 @@ static int bw_init(apr_pool_t * p, apr_pool_t * plog, apr_pool_t * ptemp,
     status = apr_shm_create(&shm, shm_size, NULL, p);
     if (status != APR_SUCCESS) {
         ap_log_error(APLOG_MARK, APLOG_ERR, 0, s,
-                     "mod_bw : Error creating shm block\n");
+            "mod_bw : Error creating shm block\n");
         return status;
     }
     /* Check size of shared memory block */
     retsize = apr_shm_size_get(shm);
     if (retsize != shm_size) {
         ap_log_error(APLOG_MARK, APLOG_ERR, 0, s,
-                     "mod_bw : Error allocating shared memory block\n");
+            "mod_bw : Error allocating shared memory block\n");
         return status;
     }
     /* Init shm block */
     bwbase = apr_shm_baseaddr_get(shm);
     if (bwbase == NULL) {
         ap_log_error(APLOG_MARK, APLOG_ERR, 0, s,
-                     "mod_bw : Error creating status block.\n");
+            "mod_bw : Error creating status block.\n");
         return status;
     }
     memset(bwbase, 0, retsize);
 
     ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, s,
-                 "mod_bw : Memory Allocated %d bytes (each conf takes %d bytes)",
-                 (int) retsize, (int) sizeof(bw_data));
+        "mod_bw : Memory Allocated %d bytes (each conf takes %d bytes)",
+        (int)retsize, (int)sizeof(bw_data));
 
     if (retsize < (sizeof(bw_data) * sid)) {
         ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, s,
-                     "mod_bw : Not enough memory allocated!! Giving up");
+            "mod_bw : Not enough memory allocated!! Giving up");
         return HTTP_INTERNAL_SERVER_ERROR;
     }
 
@@ -1212,66 +1275,65 @@ static int bw_init(apr_pool_t * p, apr_pool_t * plog, apr_pool_t * ptemp,
     }
 
     ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, s,
-                 "mod_bw : Version %s - Initialized [%d Confs]", VERSION,
-                 sid);
+        "mod_bw : Version %s - Initialized [%d Confs]", VERSION,
+        sid);
 
 
 #if defined(WIN32)	
-	// Set the timer resolution to its minimum
-    if (timeGetDevCaps (&resolution, sizeof (TIMECAPS)) == TIMERR_NOERROR)
+    // Set the timer resolution to its minimum
+    if (timeGetDevCaps(&resolution, sizeof(TIMECAPS)) == TIMERR_NOERROR)
     {
-	  ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, s,
-		    "mod_bw : Supported resolution for Timers [ Min: %d Max: %d ]",resolution.wPeriodMin,resolution.wPeriodMax);
-    
-
-      if (timeBeginPeriod (resolution.wPeriodMin) == TIMERR_NOERROR)
         ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, s,
-		    "mod_bw : Enabling High resolution timers [ %d ms ]",resolution.wPeriodMin);
-	  else
-	    ap_log_error(APLOG_MARK, APLOG_ERR, 0, s,
-		    "mod_bw : Can't enable High Resolution timers. Speed might be reduced.");
-	}
+            "mod_bw : Supported resolution for Timers [ Min: %d Max: %d ]", resolution.wPeriodMin, resolution.wPeriodMax);
+
+        if (timeBeginPeriod(resolution.wPeriodMin) == TIMERR_NOERROR)
+            ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, s,
+                "mod_bw : Enabling High resolution timers [ %d ms ]", resolution.wPeriodMin);
+        else
+            ap_log_error(APLOG_MARK, APLOG_ERR, 0, s,
+                "mod_bw : Can't enable High Resolution timers. Speed might be reduced.");
+    }
 #endif
 
     return OK;
 }
 
 
-static void *create_bw_config(apr_pool_t * p, char *path)
+static void* create_bw_config(apr_pool_t* p, char* path)
 {
-    bandwidth_config *new =
-        (bandwidth_config *) apr_palloc(p, sizeof(bandwidth_config));
+    bandwidth_config* new =
+        (bandwidth_config*)apr_palloc(p, sizeof(bandwidth_config));
 
     new->limits = apr_array_make(p, 20, sizeof(bw_entry));
     new->minlimits = apr_array_make(p, 20, sizeof(bw_entry));
     new->sizelimits = apr_array_make(p, 10, sizeof(bw_sizel));
     new->maxconnection = apr_array_make(p, 10, sizeof(bw_maxconn));
-    new->directory = (char *) apr_pstrdup(p, path);
+    new->directory = (char*)apr_pstrdup(p, path);
     new->packet = PACKET;
     new->error = HTTP_SERVICE_UNAVAILABLE;
 
-    return (void *) new;
+    return (void*) new;
 }
 
-static void *create_bw_server_config(apr_pool_t * p, server_rec * s)
+static void* create_bw_server_config(apr_pool_t* p, server_rec* s)
 {
-    bandwidth_server_config *new;
+    bandwidth_server_config* new;
 
     new =
-        (bandwidth_server_config *) apr_pcalloc(p,
-                                                sizeof
-                                                (bandwidth_server_config));
+        (bandwidth_server_config*)apr_pcalloc(p,
+            sizeof
+            (bandwidth_server_config));
     new->state = BANDWIDTH_DISABLED;
     new->force = BANDWIDTH_DISABLED;
 
-    return (void *) new;
+    return (void*) new;
 }
 
 /*----------------------------------------------------------------------------*
  * Apache register functions                                                  *
  *----------------------------------------------------------------------------*/
 
-static void register_hooks(apr_pool_t * p)
+static void register_hooks(apr_pool_t* p)
 {
     /*
        - Register a handler, which enforces mod_bw if needed
