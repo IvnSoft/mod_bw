@@ -106,6 +106,9 @@ typedef regex_t ap_regex_t;
 #define apr_atomic_set32 apr_atomic_set
 #endif
 
+
+#pragma message("This file is: " __FILE__)
+
 /* Enum types of "from address" */
 enum from_type {
     T_ALL,
@@ -998,11 +1001,11 @@ static int bw_filter(ap_filter_t *f, apr_bucket_brigade *bb)
         ctx->client_bw = 0;
 
         /* Verbose Output - but only the first time the filter is invoked per connection */
-        ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
+        ap_log_rerror(APLOG_MARK, APLOG_TRACE6, 0, r,
             "ID: %i; Directory : %s; File : %s; Rate : %s; Minimum : %s; Size rate : %s;",
             confid, conf->directory, filename, apr_strfsize(bw_rate, sizebuf[0]), apr_strfsize(bw_min, sizebuf[1]), apr_strfsize(bw_f_rate, sizebuf[2]));
 
-        ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
+        ap_log_rerror(APLOG_MARK, APLOG_TRACE6, 0, r,
             "clients : %d/%d; rate/min : %s/s,%s/s", bwmaxconn->connection_count,
             (connid >= 0) ? get_maxconn(r, conf->maxconnection) : 0,
             apr_strfsize(bw_rate, sizebuf[0]), apr_strfsize(bw_min, sizebuf[1]));
@@ -1073,7 +1076,7 @@ static int bw_filter(ap_filter_t *f, apr_bucket_brigade *bb)
                         new_client_bw > cur_rate)
                     {
                         /* Verbose logging */
-                        ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "Client BW: %s/s; Available BW: %s/s; %s", apr_strfsize(new_client_bw, sizebuf[0]), apr_strfsize(cur_rate, sizebuf[1]), (new_client_bw > cur_rate ? "Limiting!" : "Not limiting!"));
+                        ap_log_rerror(APLOG_MARK, APLOG_TRACE6, 0, r, "Client BW: %s/s; Available BW: %s/s; %s", apr_strfsize(new_client_bw, sizebuf[0]), apr_strfsize(cur_rate, sizebuf[1]), (new_client_bw > cur_rate ? "Limiting!" : "Not limiting!"));
                     }
                     ctx->client_bw = new_client_bw;
                     ctx->bw_interval_bytes = 0;
@@ -1094,7 +1097,7 @@ static int bw_filter(ap_filter_t *f, apr_bucket_brigade *bb)
                     if (ctx->sleep_bypasses_left == 0) {                      /* If not currently counting down packets... */
                         ctx->sleep_bypasses_total = current_sleep_bypasses;   /* setup counters */
                         ctx->sleep_bypasses_left = current_sleep_bypasses;
-                        ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
+                        ap_log_rerror(APLOG_MARK, APLOG_TRACE6, 0, r,
                             "Available BW: %s/s. Packet: %s. Bypassing sleep for %i packet(s). File: %s.", apr_strfsize(cur_rate, sizebuf[0]), apr_strfsize(packet, sizebuf[1]), ctx->sleep_bypasses_left, filename);
                     }
                     else {
@@ -1107,7 +1110,7 @@ static int bw_filter(ap_filter_t *f, apr_bucket_brigade *bb)
                                 ctx->sleep_bypasses_left = 0;            /* if new packets to send is less than zero, reset to zero so we sleep now*/
                             }
                             ctx->sleep_bypasses_total = current_sleep_bypasses;    /* Update the total packets to send in this period */
-                            ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
+                            ap_log_rerror(APLOG_MARK, APLOG_TRACE6, 0, r,
                                 "*Available BW: %s/s. Packet: %s. Bypassing sleep for %i packet(s). File: %s.", apr_strfsize(cur_rate, sizebuf[0]), apr_strfsize(packet, sizebuf[1]), ctx->sleep_bypasses_left, filename);
                         }
                     }
@@ -1140,7 +1143,7 @@ static int bw_filter(ap_filter_t *f, apr_bucket_brigade *bb)
                 /* If the connection goes to hell... go with it ! */
                 if (r->connection->aborted) {
                     /* Verbose. Tells when the connection was ended */
-                    ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "ID: %i; Connection went away for %s!", confid, filename);
+                    ap_log_rerror(APLOG_MARK, APLOG_TRACE6, 0, r, "ID: %i; Connection went away for %s!", confid, filename);
                     apr_atomic_dec32(&bwmaxconn->connection_count);
                     return APR_SUCCESS;
                 }
@@ -1376,6 +1379,7 @@ static const command_rec bw_cmds[] = {
     {NULL}
 };
 
+APLOG_USE_MODULE(bw);
 module AP_MODULE_DECLARE_DATA bw_module = {
     STANDARD20_MODULE_STUFF,
     create_bw_config,           /* dir config creater */
