@@ -105,6 +105,11 @@ Changelog :
     #define apr_atomic_set32 apr_atomic_set
 #endif
 
+/* Compatibility with Apache < 2.4, where conn_rec->client_addr was remote_addr */
+#if !AP_MODULE_MAGIC_AT_LEAST(20111130,0)
+    #define client_addr remote_addr
+#endif
+
 /* Enum types of "from address" */
 enum from_type {
     T_ALL,
@@ -130,7 +135,7 @@ typedef struct
     char *v_name;
     apr_uint32_t connection_count;
     apr_uint32_t bandwidth;
-    apr_uint32_t bytes_count;
+    apr_uint64_t bytes_count;
     apr_uint32_t counter;
     volatile apr_uint32_t lock;
     apr_time_t time;
@@ -141,6 +146,9 @@ typedef struct ctx_struct_t
 {
     apr_bucket_brigade *bb;
     struct timeval wait;
+    apr_uint64_t bw_interval_bytes, client_bw;
+    apr_time_t bw_interval_start_time;
+    long sleep_bypasses_left, sleep_bypasses_total;
 } ctx_struct;
 
 /* With sid we count the shared memory needed. 
@@ -193,7 +201,7 @@ typedef struct
     apr_array_header_t *minlimits;
     apr_array_header_t *sizelimits;
     apr_array_header_t *maxconnection;
-    int packet;
+    unsigned int packet;
     int error;
     char *directory;
 } bandwidth_config;
@@ -523,10 +531,10 @@ static const char *largefilelimit(cmd_parms * cmd, void *s, const char *file,
 /* Match the input, as part of a domain */
 static int in_domain(const char *domain, const char *what)
 {
-    int dl = strlen(domain);
-    int wl = strlen(what);
+    size_t dl = strlen(domain);
+    size_t wl = strlen(what);
 
-    if ((wl - dl) >= 0) {
+    if (wl >= dl) {
         if (strcasecmp(domain, &what[wl - dl]) != 0)
             return 0;
 
@@ -564,7 +572,7 @@ static long get_bw_rate(request_rec * r, apr_array_header_t * a)
             return e[i].rate;
 
         case T_IP:
-            if (apr_ipsubnet_test(e[i].x.ip, r->connection->remote_addr)) {
+            if (apr_ipsubnet_test(e[i].x.ip, r->connection->client_addr)) {
                 return e[i].rate;
             }
             break;
@@ -655,7 +663,7 @@ static int get_maxconn(request_rec * r, apr_array_header_t * a)
             return e[i].max;
 
         case T_IP:
-            if (apr_ipsubnet_test(e[i].x.ip, r->connection->remote_addr)) {
+            if (apr_ipsubnet_test(e[i].x.ip, r->connection->client_addr)) {
                 return e[i].max;
             }
             break;
@@ -706,7 +714,7 @@ static int get_sid(request_rec * r, apr_array_header_t * a)
             return e[i].sid;
 
         case T_IP:
-            if (apr_ipsubnet_test(e[i].x.ip, r->connection->remote_addr)) {
+            if (apr_ipsubnet_test(e[i].x.ip, r->connection->client_addr)) {
                 return e[i].sid;
             }
             break;
@@ -803,7 +811,7 @@ static int callback(request_rec * r)
       
         for (t = 0; t < sid; t++) {
             bwstat = bwbase + t;
-            ap_rprintf(r,"%d,%s,%d,%d,%d,%d,%d\n",t,bwstat->v_name,bwstat->lock,bwstat->connection_count,bwstat->bandwidth,bwstat->bytes_count,bwstat->counter);
+            ap_rprintf(r,"%d,%s,%d,%d,%d,%" APR_UINT64_T_FMT ",%d\n",t,bwstat->v_name,bwstat->lock,bwstat->connection_count,bwstat->bandwidth,bwstat->bytes_count,bwstat->counter);
         }
 
         return OK;
@@ -837,7 +845,7 @@ static int callback(request_rec * r)
         ap_rprintf(r,"lock : %d <br>",bwstat->lock);
         ap_rprintf(r,"count: %d <br>",bwstat->connection_count);
         ap_rprintf(r,"bw   : %d <br>",bwstat->bandwidth);
-        ap_rprintf(r,"bytes: %d <br>",bwstat->bytes_count);
+        ap_rprintf(r,"bytes: %" APR_UINT64_T_FMT " <br>",bwstat->bytes_count);
         ap_rprintf(r,"hits : %d <br>",bwstat->counter);
     }
 
@@ -866,8 +874,11 @@ static int handle_bw(request_rec * r)
     bw_data *bwstat;
     apr_int32_t confid;
 
-    /* Only work on main request/no subrequests */
-    if (r->main)
+    /* Only work on main request: skip subrequests (r->main) and internal
+       redirects (r->prev). Some modules (e.g. mod_xsendfile via mod_rewrite)
+       trigger a subrequest for path validation, which would otherwise insert
+       our output filter twice and double-count the connection. */
+    if (r->main || r->prev)
         return DECLINED;
 
     if (strcmp(r->handler, "modbw-handler")==0) return callback(r);
@@ -917,9 +928,15 @@ static int bw_filter(ap_filter_t * f, apr_bucket_brigade * bb)
     int confid = -1, connid = -1;
     apr_size_t packet = conf->packet, bytes = 0;
     apr_off_t bblen = 0;
-    long int bw_rate, bw_min, bw_f_rate, cur_rate = 0, sleep;
+    long int bw_rate, bw_min, bw_f_rate, cur_rate = 0;
+    apr_interval_time_t sleep;
     const char *buf;
     const char *filename;
+#if defined(WIN32)
+    long current_sleep_bypasses = 0;
+#endif
+    apr_uint64_t new_client_bw = 0;
+    char sizebuf[5][5];                     /* buffers for apr_strfsize() human-readable conversion */
 
     /* Only work on main request/no subrequests */
     if (r->main) {
@@ -969,13 +986,6 @@ static int bw_filter(ap_filter_t * f, apr_bucket_brigade * bb)
     else if (!bw_min)
         bw_min = MIN_BW;
 
-    /* Initialize our temporal space */
-    if (ctx == NULL) {
-        apr_bucket_alloc_t *bucket_alloc = apr_bucket_alloc_create(f->r->pool);
-        f->ctx = ctx = apr_pcalloc(f->r->pool, sizeof(*ctx));
-        ctx->bb = apr_brigade_create(f->r->pool, bucket_alloc);
-    }
-
     /* We "get" the data of the current configuration */
     bwstat = bwbase + confid;
 
@@ -988,15 +998,31 @@ static int bw_filter(ap_filter_t * f, apr_bucket_brigade * bb)
     /* Add 1 active connection to the record */
     apr_atomic_inc32(&bwmaxconn->connection_count);
 
-    /* Verbose Output */
-    ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, r->server,
-                 "ID: %i Directory : %s Rate : %ld Minimum : %ld Size rate : %ld",
-                 confid, conf->directory, bw_rate, bw_min, bw_f_rate);
-    ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, r->server,
-                 "clients : %d/%d  rate/min : %ld,%ld", bwmaxconn->connection_count,
-                 (connid >= 0) ? get_maxconn(r, conf->maxconnection) : 0,
-                  bw_rate, bw_min);
+    /* Initialize our temporal space, which survives multiple invocations for
+       the same request (the filter may be called more than once). */
+    if (ctx == NULL) {
+        apr_bucket_alloc_t *bucket_alloc = apr_bucket_alloc_create(f->r->pool);
+        f->ctx = ctx = apr_pcalloc(f->r->pool, sizeof(*ctx));
+        ctx->bb = apr_brigade_create(f->r->pool, bucket_alloc);
 
+        ctx->bw_interval_start_time = apr_time_now();
+        ctx->bw_interval_bytes = 0;
+        ctx->sleep_bypasses_left = 0;
+        ctx->sleep_bypasses_total = 0;
+        ctx->client_bw = 0;
+
+        /* Verbose output - logged only the first time the filter runs per request */
+        ap_log_rerror(APLOG_MARK, APLOG_TRACE6, 0, r,
+            "ID: %i; Directory : %s; File : %s; Rate : %s; Minimum : %s; Size rate : %s;",
+            confid, conf->directory, filename,
+            apr_strfsize(bw_rate, sizebuf[0]), apr_strfsize(bw_min, sizebuf[1]),
+            apr_strfsize(bw_f_rate, sizebuf[2]));
+
+        ap_log_rerror(APLOG_MARK, APLOG_TRACE6, 0, r,
+            "clients : %d/%d; rate/min : %s/s,%s/s", bwmaxconn->connection_count,
+            (connid >= 0) ? get_maxconn(r, conf->maxconnection) : 0,
+            apr_strfsize(bw_rate, sizebuf[0]), apr_strfsize(bw_min, sizebuf[1]));
+    }
 
     /*
        - We get buckets until a sentinel appears
@@ -1009,6 +1035,7 @@ static int bw_filter(ap_filter_t * f, apr_bucket_brigade * bb)
             APR_BUCKET_REMOVE(b);
             APR_BRIGADE_INSERT_TAIL(ctx->bb, b);
             ap_pass_brigade(f->next, ctx->bb);
+            apr_brigade_cleanup(ctx->bb);
 
             /* Delete 1 active connection */
             apr_atomic_dec32(&bwmaxconn->connection_count);
@@ -1050,16 +1077,69 @@ static int bw_filter(ap_filter_t * f, apr_bucket_brigade * bb)
 
                 /* Here we get the time we need to sleep to get the specified bw */
                 sleep =
-                    (long int) (1000000 /
+                    (apr_interval_time_t) (1000000 /
                                 ((double) cur_rate / (double) packet));
+
+                /* If more than 15ms has elapsed, roughly estimate the client's
+                   actual bandwidth so we can avoid throttling a client that is
+                   already slower than the configured limit. */
+                if (apr_time_now() - ctx->bw_interval_start_time > 15000) {
+                    new_client_bw = (ctx->bw_interval_bytes * 1000 /
+                        (apr_uint64_t) (apr_time_now() - ctx->bw_interval_start_time)) * 1000;
+                    /* Log when the client bw changed by >1K or is now above the limit */
+                    if (ctx->client_bw == 0 ||
+                        (ctx->client_bw / 1024) != (new_client_bw / 1024) ||
+                        new_client_bw > (apr_uint64_t) cur_rate)
+                    {
+                        ap_log_rerror(APLOG_MARK, APLOG_TRACE6, 0, r,
+                            "Client BW: %s/s; Available BW: %s/s; %s",
+                            apr_strfsize(new_client_bw, sizebuf[0]),
+                            apr_strfsize(cur_rate, sizebuf[1]),
+                            (new_client_bw > (apr_uint64_t) cur_rate ? "Limiting!" : "Not limiting!"));
+                    }
+                    ctx->client_bw = new_client_bw;
+                    ctx->bw_interval_bytes = 0;
+                    ctx->bw_interval_start_time = apr_time_now();
+                }
+
 #if defined(WIN32)
-                if (sleep < 200000 && cur_rate > 1024) 
-				{
-					sleep = 200000;
-                    packet = cur_rate/5;
-					if (bytes < packet)
-                         packet = bytes;
-				}
+                /* Windows can only sleep for ~10ms at a time. If the needed sleep
+                   is shorter, send however many packets fit in 10ms and then sleep
+                   once. For very small buckets the bypass count can exceed the number
+                   of buckets, which is harmless. */
+                if (sleep < 10000 && (ctx->client_bw > (apr_uint64_t) cur_rate || ctx->client_bw == 0))
+                {
+                    /* how many packets can be sent in 10ms at the current rate */
+                    current_sleep_bypasses = (long) ((double) 10000 / (double) (sleep + 1)); /* +1us avoids divide by zero */
+
+                    sleep = 10000;
+
+                    if (ctx->sleep_bypasses_left == 0) {       /* not currently counting down */
+                        ctx->sleep_bypasses_total = current_sleep_bypasses;
+                        ctx->sleep_bypasses_left = current_sleep_bypasses;
+                        ap_log_rerror(APLOG_MARK, APLOG_TRACE6, 0, r,
+                            "Available BW: %s/s. Packet: %s. Bypassing sleep for %i packet(s). File: %s.",
+                            apr_strfsize(cur_rate, sizebuf[0]), apr_strfsize(packet, sizebuf[1]),
+                            ctx->sleep_bypasses_left, filename);
+                    }
+                    else {
+                        /* Available bw changed mid-countdown: recompute remaining packets */
+                        if (ctx->sleep_bypasses_total != current_sleep_bypasses) {
+                            ctx->sleep_bypasses_left = current_sleep_bypasses -
+                                (ctx->sleep_bypasses_total - ctx->sleep_bypasses_left);
+                            if (ctx->sleep_bypasses_left < 0)
+                                ctx->sleep_bypasses_left = 0;
+                            ctx->sleep_bypasses_total = current_sleep_bypasses;
+                            ap_log_rerror(APLOG_MARK, APLOG_TRACE6, 0, r,
+                                "*Available BW: %s/s. Packet: %s. Bypassing sleep for %i packet(s). File: %s.",
+                                apr_strfsize(cur_rate, sizebuf[0]), apr_strfsize(packet, sizebuf[1]),
+                                ctx->sleep_bypasses_left, filename);
+                        }
+                    }
+                }
+                else {
+                    ctx->sleep_bypasses_left = 0;
+                }
 #endif
 
                 /* 
@@ -1073,25 +1153,37 @@ static int bw_filter(ap_filter_t * f, apr_bucket_brigade * bb)
 
                 /* Decrease our counter */
                 bytes -= packet;
+                ctx->bw_interval_bytes += packet;
 
                 /* Flush and move to the next bucket */
                 ap_pass_brigade(f->next, ctx->bb);
+                apr_brigade_cleanup(ctx->bb);
                 b = APR_BRIGADE_FIRST(bb);
 
                 /* Add the number of bytes transferred, so we can get an estimated bw usage */
-                apr_atomic_add32(&bwstat->bytes_count, packet);
+                apr_atomic_add64(&bwstat->bytes_count, packet);
 
                 /* If the connection goes to hell... go with it ! */
                 if (r->connection->aborted) {
                     /* Verbose. Tells when the connection was ended */
-                    ap_log_error(APLOG_MARK, APLOG_DEBUG,
-                                 0, r->server, "Connection to hell");
+                    ap_log_rerror(APLOG_MARK, APLOG_TRACE6, 0, r,
+                                 "ID: %i; Connection went away for %s!", confid, filename);
                     apr_atomic_dec32(&bwmaxconn->connection_count);
                     return APR_SUCCESS;
                 }
 
-                /* Sleep ... zZZzZzZzzzz */
-                apr_sleep(sleep);
+                /* Sleep ... but only when needed (see Windows resolution fix above) */
+                if (ctx->sleep_bypasses_left > 0) {
+                    ctx->sleep_bypasses_left--;
+                }
+                else {
+                    /* Only sleep if the client is faster than the limit, or unknown */
+                    if (ctx->client_bw > (apr_uint64_t) cur_rate || ctx->client_bw == 0) {
+                        apr_sleep(sleep);
+                        ctx->bw_interval_start_time += sleep;  /* exclude sleep time from the interval */
+                    }
+                    ctx->sleep_bypasses_left = 0;
+                }
 
                 /* Refresh counters, so we can keep working :) */
                 update_counters(bwstat, f);
@@ -1102,11 +1194,12 @@ static int bw_filter(ap_filter_t * f, apr_bucket_brigade * bb)
         APR_BRIGADE_INSERT_TAIL(ctx->bb, b);
         b = APR_BRIGADE_FIRST(bb);
 
-        /* Add the number of bytes to the counter */
-        apr_atomic_add32(&bwstat->bytes_count, bytes);
+        /* Add the number of bytes to the counter (64-bit, for big files) */
+        apr_atomic_add64(&bwstat->bytes_count, bytes);
 
         /* Pass the final brigade */
         ap_pass_brigade(f->next, ctx->bb);
+        apr_brigade_cleanup(ctx->bb);
     }
 
     /* Delete 1 active connection to the record */
@@ -1309,6 +1402,9 @@ static const command_rec bw_cmds[] = {
                   "a file extension, a filesize (in Kbytes) and a bandwidth limit (in bytes/s)"),
     {NULL}
 };
+
+/* Required for per-module log level control (e.g. "LogLevel bw:trace6") */
+APLOG_USE_MODULE(bw);
 
 module AP_MODULE_DECLARE_DATA bw_module = {
     STANDARD20_MODULE_STUFF,
