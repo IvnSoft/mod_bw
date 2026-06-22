@@ -1,3 +1,20 @@
+V0.95
+------------
+2026-06-21 :
+
+- Apache 2.4 support: conn_rec->client_addr (still builds on 2.2 via a compat define)
+- 64-bit byte counters for large files and high configured bandwidth
+- Windows: send several packets per 10ms sleep so the configured rate is met
+- Track the client's bandwidth; skip throttling a client already slower than the limit
+- Do not insert the output filter twice on subrequests/redirects (mod_xsendfile + rewrite)
+- Per-request trace logging (LogLevel bw:trace6) with human-readable sizes
+
+  Much of this round (Apache 2.4, Windows timing, the double-filter fix) is
+  based on contributions from @sosherof (PRs #3, #4, #6). Thanks!
+
+  Headed through synthetic and real-world testing before this line is
+  finalized as 1.0.
+
 V0.92
 ------------
 2010-07-20 :

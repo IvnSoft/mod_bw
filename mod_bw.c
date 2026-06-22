@@ -1,6 +1,6 @@
 /*
 
-Apache2 - Mod_bw v0.92
+Apache2 - Mod_bw v0.95
 
 Author       : Ivan Barrera A. (Bruce)
 
@@ -48,7 +48,7 @@ Changelog :
 
 */
 
-#define VERSION "0.92"
+#define VERSION "0.95"
 
 #include "apr_version.h"
 #include "apr_buckets.h"
